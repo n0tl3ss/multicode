@@ -310,7 +310,7 @@ when you intentionally want to move the image to a newer Codex release.
 You can also override the pinned version at build time without editing the file:
 
 ```bash
-CODEX_VERSION=0.121.0 ./apple-container/build-local.sh
+CODEX_VERSION=0.122.0 ./apple-container/build-local.sh
 ```
 
 That script produces:

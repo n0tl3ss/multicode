@@ -1807,7 +1807,7 @@ impl TuiState {
         };
         let previous_snapshot = snapshot.clone();
         let should_restart =
-            should_restart_codex_task_for_ci_fix(task_runtime_snapshot(&snapshot, &task_id));
+            should_restart_codex_task_for_pr_request(task_runtime_snapshot(&snapshot, &task_id));
         let (progress_tx, progress_rx) =
             watch::channel("Preparing PR approval request...".to_string());
         let (result_tx, result_rx) = oneshot::channel();

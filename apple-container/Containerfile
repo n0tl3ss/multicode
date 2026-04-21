@@ -7,7 +7,7 @@ FROM ghcr.io/graalvm/native-image-community:25
 ARG HOST_UID=1000
 ARG HOST_GID=1000
 ARG GH_VERSION=2.83.2
-ARG CODEX_VERSION=0.121.0
+ARG CODEX_VERSION=0.122.0
 ARG INSTALL_OPENCODE=1
 ARG INSTALL_CODEX=0
 
@@ -42,12 +42,6 @@ RUN set -eux; \
     tar -xzf /tmp/gh.tar.gz -C /tmp; \
     install "/tmp/gh_${GH_VERSION}_linux_${gh_arch}/bin/gh" /usr/local/bin/gh; \
     rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${gh_arch}"; \
-    if [ "${INSTALL_OPENCODE}" = "1" ]; then \
-        npm install -g opencode-ai; \
-    fi; \
-    if [ "${INSTALL_CODEX}" = "1" ]; then \
-        npm install -g "@openai/codex@${CODEX_VERSION}"; \
-    fi; \
     if ! getent group "${HOST_GID}" >/dev/null; then \
         groupadd --gid "${HOST_GID}" multicode; \
     fi; \
@@ -59,6 +53,14 @@ RUN set -eux; \
         --create-home \
         --shell /bin/bash \
         multicode
+
+RUN set -eux; \
+    if [ "${INSTALL_OPENCODE}" = "1" ]; then \
+        npm install -g opencode-ai; \
+    fi; \
+    if [ "${INSTALL_CODEX}" = "1" ]; then \
+        npm install -g "@openai/codex@${CODEX_VERSION}"; \
+    fi
 
 ENV HOME=/home/multicode
 ENV JDK21_HOME=/opt/jdks/jdk21

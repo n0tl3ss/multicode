@@ -1538,6 +1538,7 @@ fn next_schedulable_task_issue_url(
     snapshot: &WorkspaceSnapshot,
     exclude_issue_url: Option<&str>,
 ) -> Option<String> {
+    let has_active_task = active_task_id_for_snapshot(snapshot).is_some();
     snapshot
         .persistent
         .tasks
@@ -1552,15 +1553,13 @@ fn next_schedulable_task_issue_url(
             if task_state.waiting_on_vm {
                 return true;
             }
-            !matches!(
-                normalized_task_agent_state(task_state),
-                Some(
-                    AutomationAgentState::Working
-                        | AutomationAgentState::Question
-                        | AutomationAgentState::Review
-                        | AutomationAgentState::Idle
-                )
-            )
+            match normalized_task_agent_state(task_state) {
+                Some(AutomationAgentState::Working | AutomationAgentState::Question) => false,
+                Some(AutomationAgentState::Review | AutomationAgentState::Idle) => !has_active_task,
+                Some(AutomationAgentState::WaitingOnVm | AutomationAgentState::Stale) | None => {
+                    true
+                }
+            }
         })
         .map(|task| task.issue_url.clone())
 }
@@ -1589,6 +1588,9 @@ fn active_task_can_yield_vm(snapshot: &WorkspaceSnapshot) -> bool {
         return false;
     };
     if task_state.session_id.is_none() {
+        return false;
+    }
+    if task_state.status.as_deref() == Some("Resuming in background") {
         return false;
     }
     task_can_yield_vm(normalized_task_agent_state(task_state))
@@ -2739,7 +2741,7 @@ fn unloaded_codex_task_runtime(
             (RootSessionStatus::Question, AutomationAgentState::Question)
         }
         Some(AutomationAgentState::Stale) => (RootSessionStatus::Idle, AutomationAgentState::Stale),
-        Some(AutomationAgentState::Review | AutomationAgentState::Idle) => {
+        Some(AutomationAgentState::Review | AutomationAgentState::Idle) if preserve_review => {
             (RootSessionStatus::Idle, AutomationAgentState::Review)
         }
         _ if preserve_review => (RootSessionStatus::Idle, AutomationAgentState::Review),
@@ -2911,8 +2913,20 @@ fn set_task_runtime_state_from_codex(
             task_state.session_status = Some(session_status);
             changed = true;
         }
-        if task_state.status != next_status_text {
-            task_state.status = next_status_text.clone();
+        let preserve_resuming_status = task_state.status.as_deref()
+            == Some("Resuming in background")
+            && agent_state == AutomationAgentState::Review
+            && session_status == RootSessionStatus::Idle
+            && metadata
+                .as_ref()
+                .is_none_or(|metadata| metadata.prs.is_empty());
+        let applied_status = if preserve_resuming_status {
+            Some("Resuming in background".to_string())
+        } else {
+            next_status_text.clone()
+        };
+        if task_state.status != applied_status {
+            task_state.status = applied_status;
             changed = true;
         }
         let should_wait = task_should_wait_on_vm(is_active, Some(agent_state));
@@ -7021,6 +7035,75 @@ mod tests {
     }
 
     #[test]
+    fn next_schedulable_task_issue_url_reuses_review_task_when_no_active_lease_exists() {
+        let mut snapshot = WorkspaceSnapshot::default();
+        snapshot
+            .persistent
+            .tasks
+            .push(WorkspaceTaskPersistentSnapshot::new(
+                "task-1".to_string(),
+                "https://github.com/example/repo/issues/1".to_string(),
+                WorkspaceTaskSource::Manual,
+            ));
+        snapshot.task_states.insert(
+            "task-1".to_string(),
+            crate::WorkspaceTaskRuntimeSnapshot {
+                agent_state: Some(AutomationAgentState::Review),
+                session_status: Some(RootSessionStatus::Idle),
+                session_id: Some("thread-1".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            next_schedulable_task_issue_url(&snapshot, None).as_deref(),
+            Some("https://github.com/example/repo/issues/1")
+        );
+    }
+
+    #[test]
+    fn next_schedulable_task_issue_url_skips_review_task_when_another_task_is_active() {
+        let mut snapshot = WorkspaceSnapshot::default();
+        snapshot
+            .persistent
+            .tasks
+            .push(WorkspaceTaskPersistentSnapshot::new(
+                "task-1".to_string(),
+                "https://github.com/example/repo/issues/1".to_string(),
+                WorkspaceTaskSource::Manual,
+            ));
+        snapshot
+            .persistent
+            .tasks
+            .push(WorkspaceTaskPersistentSnapshot::new(
+                "task-2".to_string(),
+                "https://github.com/example/repo/issues/2".to_string(),
+                WorkspaceTaskSource::Manual,
+            ));
+        snapshot.active_task_id = Some("task-2".to_string());
+        snapshot.task_states.insert(
+            "task-1".to_string(),
+            crate::WorkspaceTaskRuntimeSnapshot {
+                agent_state: Some(AutomationAgentState::Review),
+                session_status: Some(RootSessionStatus::Idle),
+                session_id: Some("thread-1".to_string()),
+                ..Default::default()
+            },
+        );
+        snapshot.task_states.insert(
+            "task-2".to_string(),
+            crate::WorkspaceTaskRuntimeSnapshot {
+                agent_state: Some(AutomationAgentState::Working),
+                session_status: Some(RootSessionStatus::Busy),
+                session_id: Some("thread-2".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(next_schedulable_task_issue_url(&snapshot, None), None);
+    }
+
+    #[test]
     fn task_can_yield_vm_only_for_non_working_states() {
         assert!(!task_can_yield_vm(Some(AutomationAgentState::Working)));
         assert!(task_can_yield_vm(Some(AutomationAgentState::Question)));
@@ -7099,6 +7182,32 @@ mod tests {
         );
 
         assert!(active_task_can_yield_vm(&snapshot));
+    }
+
+    #[test]
+    fn active_task_can_yield_vm_blocks_resuming_background_task() {
+        let mut snapshot = WorkspaceSnapshot::default();
+        snapshot
+            .persistent
+            .tasks
+            .push(WorkspaceTaskPersistentSnapshot::new(
+                "task-5".to_string(),
+                "https://github.com/example/repo/issues/5".to_string(),
+                WorkspaceTaskSource::Scan,
+            ));
+        snapshot.active_task_id = Some("task-5".to_string());
+        snapshot.task_states.insert(
+            "task-5".to_string(),
+            crate::WorkspaceTaskRuntimeSnapshot {
+                session_id: Some("thread-5".to_string()),
+                agent_state: Some(AutomationAgentState::Review),
+                session_status: Some(RootSessionStatus::Idle),
+                status: Some("Resuming in background".to_string()),
+                ..Default::default()
+            },
+        );
+
+        assert!(!active_task_can_yield_vm(&snapshot));
     }
 
     #[test]
@@ -7408,6 +7517,47 @@ mod tests {
             .get("task-33")
             .expect("task state should exist");
         assert_eq!(task_state.status.as_deref(), Some("PR created #56"));
+    }
+
+    #[test]
+    fn set_task_runtime_state_from_codex_preserves_resuming_status_for_idle_review_without_pr() {
+        let workspace = Workspace::new(WorkspaceSnapshot::default());
+        workspace.update(|snapshot| {
+            snapshot
+                .persistent
+                .tasks
+                .push(WorkspaceTaskPersistentSnapshot::new(
+                    "task-33".to_string(),
+                    "https://github.com/example/repo/issues/33".to_string(),
+                    WorkspaceTaskSource::Scan,
+                ));
+            snapshot.active_task_id = Some("task-33".to_string());
+            snapshot.task_states.insert(
+                "task-33".to_string(),
+                crate::WorkspaceTaskRuntimeSnapshot {
+                    status: Some("Resuming in background".to_string()),
+                    ..Default::default()
+                },
+            );
+            true
+        });
+
+        set_task_runtime_state_from_codex(
+            &workspace,
+            "task-33",
+            "task-session-33",
+            RootSessionStatus::Idle,
+            AutomationAgentState::Review,
+            Some(CodexTaskMetadata::default()),
+            None,
+        );
+
+        let snapshot = workspace.subscribe().borrow().clone();
+        let task_state = snapshot
+            .task_states
+            .get("task-33")
+            .expect("task state should exist");
+        assert_eq!(task_state.status.as_deref(), Some("Resuming in background"));
     }
 
     #[test]
@@ -7758,7 +7908,7 @@ mod tests {
     }
 
     #[test]
-    fn unloaded_codex_status_preserves_review_runtime_state() {
+    fn unloaded_codex_status_marks_unbacked_review_runtime_state_as_stale() {
         let task_state = crate::WorkspaceTaskRuntimeSnapshot {
             agent_state: Some(AutomationAgentState::Review),
             session_status: Some(RootSessionStatus::Idle),
@@ -7773,7 +7923,7 @@ mod tests {
 
         assert_eq!(
             runtime,
-            (RootSessionStatus::Idle, AutomationAgentState::Review)
+            (RootSessionStatus::Idle, AutomationAgentState::Stale)
         );
     }
 
