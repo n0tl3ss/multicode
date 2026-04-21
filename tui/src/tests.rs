@@ -3814,6 +3814,26 @@ mod tests {
     }
 
     #[test]
+    fn server_cell_label_prefers_active_task_busy_state_over_stale_workspace_automation_status() {
+        let mut started = snapshot(true, Some("http://example"));
+        assign_active_task(&mut started, "https://github.com/example/repo/issues/42");
+        started.root_session_status = Some(RootSessionStatus::Idle);
+        started.automation_agent_state = Some(AutomationAgentState::Review);
+        started.automation_session_status = Some(RootSessionStatus::Idle);
+        started.task_states.insert(
+            "task-42".to_string(),
+            multicode_lib::WorkspaceTaskRuntimeSnapshot {
+                session_id: Some("thread-42".to_string()),
+                session_status: Some(RootSessionStatus::Busy),
+                agent_state: Some(AutomationAgentState::Working),
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(server_cell_label(&started), "Busy");
+    }
+
+    #[test]
     fn description_cell_text_appends_root_session_title_after_description() {
         let mut started = snapshot(true, Some("http://example"));
         started.persistent.description = "Custom description".to_string();

@@ -501,6 +501,16 @@ fn workspace_active_task<'a>(
         .and_then(|task_id| snapshot.task_persistent_snapshot(&task_id))
 }
 
+fn workspace_active_task_state(
+    snapshot: &WorkspaceSnapshot,
+) -> Option<&WorkspaceTaskRuntimeSnapshot> {
+    snapshot
+        .active_task_id
+        .clone()
+        .or_else(|| snapshot.resolved_active_task_id())
+        .and_then(|task_id| snapshot.task_states.get(&task_id))
+}
+
 fn workspace_issue_type(snapshot: &WorkspaceSnapshot) -> Option<WorkspaceIssueType> {
     workspace_active_task(snapshot).and_then(|task| task.issue_type)
 }
@@ -652,6 +662,17 @@ fn server_cell_label(snapshot: &WorkspaceSnapshot) -> &'static str {
 
 fn effective_server_status(snapshot: &WorkspaceSnapshot) -> RootSessionStatus {
     if active_task_issue_url(snapshot).is_some() {
+        if let Some(agent_state) = task_effective_agent_state(workspace_active_task_state(snapshot))
+        {
+            return match agent_state {
+                AutomationAgentState::Working => RootSessionStatus::Busy,
+                AutomationAgentState::Question => RootSessionStatus::Question,
+                AutomationAgentState::WaitingOnVm
+                | AutomationAgentState::Review
+                | AutomationAgentState::Idle
+                | AutomationAgentState::Stale => RootSessionStatus::Idle,
+            };
+        }
         if let Some(agent_state) = snapshot.automation_agent_state {
             return match agent_state {
                 AutomationAgentState::Working => RootSessionStatus::Busy,
