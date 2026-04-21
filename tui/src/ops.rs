@@ -173,11 +173,13 @@ pub(crate) fn workspace_attach_target(snapshot: &WorkspaceSnapshot) -> io::Resul
                             .map(|transient| transient.runtime.id.clone())
                             .unwrap_or_default(),
                         thread_id: snapshot.root_session_id.clone(),
+                        cwd: None,
                     }
                 }
                 _ => AttachTarget::Codex {
                     uri: parsed.to_string(),
                     thread_id: snapshot.root_session_id.clone(),
+                    cwd: None,
                 },
             },
         );
@@ -212,6 +214,7 @@ pub(crate) fn workspace_attach_target(snapshot: &WorkspaceSnapshot) -> io::Resul
 pub(crate) fn task_attach_target(
     snapshot: &WorkspaceSnapshot,
     task_state: &multicode_lib::WorkspaceTaskRuntimeSnapshot,
+    cwd: Option<String>,
 ) -> io::Result<AttachTarget> {
     if workspace_state(snapshot) != WorkspaceUiState::Started {
         return Err(io::Error::other(
@@ -248,11 +251,13 @@ pub(crate) fn task_attach_target(
                             .map(|transient| transient.runtime.id.clone())
                             .unwrap_or_default(),
                         thread_id: Some(session_id),
+                        cwd,
                     }
                 }
                 _ => AttachTarget::Codex {
                     uri: parsed.to_string(),
                     thread_id: Some(session_id),
+                    cwd,
                 },
             },
         );
@@ -382,8 +387,16 @@ pub(crate) fn attach_cli_args(agent_command: &str, target: &AttachTarget) -> Vec
             args.push(uri.clone());
             args
         }
-        AttachTarget::Codex { uri, thread_id } => {
+        AttachTarget::Codex {
+            uri,
+            thread_id,
+            cwd,
+        } => {
             let mut args = codex_interactive_base_args(agent_command);
+            if let Some(cwd) = cwd.as_deref() {
+                args.push("-C".to_string());
+                args.push(cwd.to_string());
+            }
             args.push("resume".to_string());
             args.push("--remote".to_string());
             args.push(uri.clone());
@@ -397,6 +410,7 @@ pub(crate) fn attach_cli_args(agent_command: &str, target: &AttachTarget) -> Vec
         AttachTarget::CodexContainerExec {
             runtime_id,
             thread_id,
+            cwd,
         } => {
             let mut args = vec![
                 container_program(),
@@ -406,7 +420,13 @@ pub(crate) fn attach_cli_args(agent_command: &str, target: &AttachTarget) -> Vec
                 runtime_id.clone(),
                 "codex".to_string(),
             ];
-            args.extend(codex_interactive_args_after_binary(["resume".to_string()]));
+            let mut codex_args = Vec::new();
+            if let Some(cwd) = cwd.as_deref() {
+                codex_args.push("-C".to_string());
+                codex_args.push(cwd.to_string());
+            }
+            codex_args.push("resume".to_string());
+            args.extend(codex_interactive_args_after_binary(codex_args));
             if let Some(thread_id) = thread_id.as_deref() {
                 args.push(thread_id.to_string());
             } else {
@@ -497,6 +517,7 @@ pub(crate) async fn attach_in_tmux(
         AttachTarget::CodexContainerExec {
             runtime_id,
             thread_id,
+            cwd,
         } => {
             let mut args = vec![
                 container_program(),
@@ -504,13 +525,23 @@ pub(crate) async fn attach_in_tmux(
                 "--tty".to_string(),
                 "--interactive".to_string(),
             ];
-            if let Some(cwd) = effective_cwd {
+            if let Some(cwd) = cwd
+                .as_deref()
+                .map(PathBuf::from)
+                .or_else(|| effective_cwd.map(Path::to_path_buf))
+            {
                 args.push("--workdir".to_string());
                 args.push(cwd.to_string_lossy().into_owned());
             }
             args.push(runtime_id.clone());
             args.push("codex".to_string());
-            args.extend(codex_interactive_args_after_binary(["resume".to_string()]));
+            let mut codex_args = Vec::new();
+            if let Some(cwd) = cwd.as_deref() {
+                codex_args.push("-C".to_string());
+                codex_args.push(cwd.to_string());
+            }
+            codex_args.push("resume".to_string());
+            args.extend(codex_interactive_args_after_binary(codex_args));
             if let Some(thread_id) = thread_id.as_deref() {
                 args.push(thread_id.to_string());
             } else {

@@ -474,7 +474,7 @@ pub(crate) fn should_restart_task_codex_after_attach(
 pub(crate) fn working_codex_task_attach_target(
     snapshot: &WorkspaceSnapshot,
     task_id: Option<&str>,
-    _cwd: Option<String>,
+    cwd: Option<String>,
 ) -> io::Result<Option<AttachTarget>> {
     let Some(task_id) = task_id else {
         return Ok(None);
@@ -489,6 +489,7 @@ pub(crate) fn working_codex_task_attach_target(
     Ok(codex_resume_attach_target(
         snapshot,
         task_state.session_id.clone(),
+        cwd,
     )?)
 }
 
@@ -499,6 +500,7 @@ pub(crate) fn should_retry_codex_task_attach_with_last_thread(
     attached_workspace_key: Option<&str>,
     task_id: Option<&str>,
     session_id: Option<&str>,
+    cwd: Option<String>,
 ) -> Option<AttachTarget> {
     if provider != multicode_lib::services::AgentProvider::Codex
         || attached_workspace_key != Some(workspace_key)
@@ -513,7 +515,9 @@ pub(crate) fn should_retry_codex_task_attach_with_last_thread(
         return None;
     }
 
-    codex_resume_attach_target(snapshot, None).ok().flatten()
+    codex_resume_attach_target(snapshot, None, cwd)
+        .ok()
+        .flatten()
 }
 
 pub(crate) fn should_start_fresh_codex_task_session_after_failed_attach(
@@ -1588,10 +1592,14 @@ impl TuiState {
             .snapshots
             .get(key)
             .ok_or_else(|| io::Error::other(format!("workspace snapshot missing for '{key}'")))?;
+        let cwd = if self.service.agent_provider() == multicode_lib::services::AgentProvider::Codex
+        {
+            self.attach_cwd_for_workspace(key)
+                .map(|path| path.to_string_lossy().into_owned())
+        } else {
+            None
+        };
         if self.service.agent_provider() == multicode_lib::services::AgentProvider::Codex {
-            let cwd = self
-                .attach_cwd_for_workspace(key)
-                .map(|path| path.to_string_lossy().into_owned());
             if let Some(target) =
                 working_codex_task_attach_target(snapshot, self.selected_task_id(), cwd.clone())?
             {
@@ -1606,7 +1614,7 @@ impl TuiState {
                 );
             }
         }
-        snapshot_attach_target_for_selection(snapshot, self.selected_task_id())
+        snapshot_attach_target_for_selection(snapshot, self.selected_task_id(), cwd)
     }
 
     fn record_attached_session(&mut self, key: &str, target: &AttachTarget) {
@@ -2210,6 +2218,8 @@ impl TuiState {
             attached_session
                 .as_ref()
                 .and_then(|attached| attached.session_id.as_deref()),
+            self.attach_cwd_for_workspace(key)
+                .map(|path| path.to_string_lossy().into_owned()),
         ) else {
             return false;
         };
@@ -4400,6 +4410,7 @@ impl TuiState {
 pub(crate) fn snapshot_attach_target_for_selection(
     snapshot: &WorkspaceSnapshot,
     selected_task_id: Option<&str>,
+    cwd: Option<String>,
 ) -> io::Result<AttachTarget> {
     if let Some(task_id) = selected_task_id {
         let task_state = task_runtime_snapshot(snapshot, task_id);
@@ -4415,13 +4426,13 @@ pub(crate) fn snapshot_attach_target_for_selection(
                     .and_then(|task_state| task_state.session_id.as_deref())
                     .is_none());
         if should_use_last_codex_thread {
-            if let Some(target) = codex_resume_attach_target(snapshot, None)? {
+            if let Some(target) = codex_resume_attach_target(snapshot, None, cwd.clone())? {
                 return Ok(target);
             }
             return workspace_attach_target(snapshot);
         }
         if let Some(task_state) = task_state {
-            return task_attach_target(snapshot, task_state);
+            return task_attach_target(snapshot, task_state, cwd);
         }
     }
     workspace_attach_target(snapshot)
@@ -4480,14 +4491,20 @@ pub(crate) fn build_fresh_codex_attach_target(
 fn codex_resume_attach_target(
     snapshot: &WorkspaceSnapshot,
     thread_id: Option<String>,
+    cwd: Option<String>,
 ) -> io::Result<Option<AttachTarget>> {
     if let Some(runtime_id) = codex_container_runtime_id(snapshot) {
         return Ok(Some(AttachTarget::CodexContainerExec {
             runtime_id,
             thread_id,
+            cwd,
         }));
     }
-    Ok(codex_attach_uri(snapshot)?.map(|uri| AttachTarget::Codex { uri, thread_id }))
+    Ok(codex_attach_uri(snapshot)?.map(|uri| AttachTarget::Codex {
+        uri,
+        thread_id,
+        cwd,
+    }))
 }
 
 pub(crate) fn snapshot_attach_cwd_for_selection(

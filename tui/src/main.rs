@@ -356,10 +356,12 @@ enum AttachTarget {
     Codex {
         uri: String,
         thread_id: Option<String>,
+        cwd: Option<String>,
     },
     CodexContainerExec {
         runtime_id: String,
         thread_id: Option<String>,
+        cwd: Option<String>,
     },
     CodexContainerNew {
         runtime_id: String,

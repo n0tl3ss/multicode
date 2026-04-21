@@ -1015,6 +1015,7 @@ mod tests {
             AttachTarget::Codex {
                 uri: "ws://127.0.0.1:3456/".to_string(),
                 thread_id: Some("thread-123".to_string()),
+                cwd: None,
             }
         );
     }
@@ -1044,6 +1045,7 @@ mod tests {
             AttachTarget::CodexContainerExec {
                 runtime_id: "ctr-1".to_string(),
                 thread_id: Some("thread-123".to_string()),
+                cwd: None,
             }
         );
     }
@@ -1098,7 +1100,7 @@ mod tests {
             ..Default::default()
         };
 
-        let target = task_attach_target(&started, &task_state)
+        let target = task_attach_target(&started, &task_state, None)
             .expect("task attach target should use task session id");
 
         assert_eq!(
@@ -1121,7 +1123,7 @@ mod tests {
             ..Default::default()
         };
 
-        let target = task_attach_target(&started, &task_state)
+        let target = task_attach_target(&started, &task_state, Some("/tmp/task-1".to_string()))
             .expect("task attach target should use task thread id");
 
         assert_eq!(
@@ -1129,6 +1131,7 @@ mod tests {
             AttachTarget::Codex {
                 uri: "ws://127.0.0.1:3456/".to_string(),
                 thread_id: Some("thread-task-1".to_string()),
+                cwd: Some("/tmp/task-1".to_string()),
             }
         );
     }
@@ -1154,7 +1157,7 @@ mod tests {
             ..Default::default()
         };
 
-        let target = task_attach_target(&started, &task_state)
+        let target = task_attach_target(&started, &task_state, Some("/tmp/task-1".to_string()))
             .expect("task attach target should use container exec for apple-container codex");
 
         assert_eq!(
@@ -1162,6 +1165,7 @@ mod tests {
             AttachTarget::CodexContainerExec {
                 runtime_id: "ctr-1".to_string(),
                 thread_id: Some("thread-task-1".to_string()),
+                cwd: Some("/tmp/task-1".to_string()),
             }
         );
     }
@@ -1174,7 +1178,7 @@ mod tests {
         started.persistent.automation_paused = true;
         assign_active_task(&mut started, "https://github.com/example/repo/issues/42");
 
-        let target = snapshot_attach_target_for_selection(&started, Some("task-42"))
+        let target = snapshot_attach_target_for_selection(&started, Some("task-42"), None)
             .expect("paused task selection should fall back to workspace attach");
 
         assert_eq!(
@@ -1196,14 +1200,19 @@ mod tests {
         started.persistent.automation_paused = true;
         assign_active_task(&mut started, "https://github.com/example/repo/issues/42");
 
-        let target = snapshot_attach_target_for_selection(&started, Some("task-42"))
-            .expect("paused codex task selection should attach via last task thread");
+        let target = snapshot_attach_target_for_selection(
+            &started,
+            Some("task-42"),
+            Some("/tmp/task-42".to_string()),
+        )
+        .expect("paused codex task selection should attach via last task thread");
 
         assert_eq!(
             target,
             AttachTarget::Codex {
                 uri: "ws://127.0.0.1:3456/".to_string(),
                 thread_id: None,
+                cwd: Some("/tmp/task-42".to_string()),
             }
         );
     }
@@ -1222,14 +1231,19 @@ mod tests {
             },
         );
 
-        let target = snapshot_attach_target_for_selection(&started, Some("task-42"))
-            .expect("stale codex task should attach via last thread");
+        let target = snapshot_attach_target_for_selection(
+            &started,
+            Some("task-42"),
+            Some("/tmp/task-42".to_string()),
+        )
+        .expect("stale codex task should attach via last thread");
 
         assert_eq!(
             target,
             AttachTarget::Codex {
                 uri: "ws://127.0.0.1:3456/".to_string(),
                 thread_id: None,
+                cwd: Some("/tmp/task-42".to_string()),
             }
         );
     }
@@ -1249,14 +1263,19 @@ mod tests {
             },
         );
 
-        let target = snapshot_attach_target_for_selection(&started, Some("task-42"))
-            .expect("not-loaded codex task should attach via last thread");
+        let target = snapshot_attach_target_for_selection(
+            &started,
+            Some("task-42"),
+            Some("/tmp/task-42".to_string()),
+        )
+        .expect("not-loaded codex task should attach via last thread");
 
         assert_eq!(
             target,
             AttachTarget::Codex {
                 uri: "ws://127.0.0.1:3456/".to_string(),
                 thread_id: None,
+                cwd: Some("/tmp/task-42".to_string()),
             }
         );
     }
@@ -1282,6 +1301,7 @@ mod tests {
             Some("ws"),
             Some("task-42"),
             Some("thread-stale"),
+            Some("/tmp/task-42".to_string()),
         );
 
         assert_eq!(
@@ -1289,6 +1309,7 @@ mod tests {
             Some(AttachTarget::Codex {
                 uri: "ws://127.0.0.1:3456/".to_string(),
                 thread_id: None,
+                cwd: Some("/tmp/task-42".to_string()),
             })
         );
     }
@@ -1312,6 +1333,7 @@ mod tests {
             Some("ws"),
             Some("task-42"),
             None,
+            Some("/tmp/task-42".to_string()),
         );
 
         assert_eq!(target, None);
@@ -1409,6 +1431,7 @@ mod tests {
             Some(AttachTarget::Codex {
                 uri: "ws://127.0.0.1:3456/".to_string(),
                 thread_id: Some("thread-42".to_string()),
+                cwd: Some("/tmp/task-42".to_string()),
             })
         );
     }
@@ -1426,7 +1449,7 @@ mod tests {
             },
         );
 
-        let target = snapshot_attach_target_for_selection(&started, Some("task-42"))
+        let target = snapshot_attach_target_for_selection(&started, Some("task-42"), None)
             .expect("task session should still be preferred");
 
         assert_eq!(
@@ -1445,12 +1468,15 @@ mod tests {
         let target = AttachTarget::Codex {
             uri: "ws://127.0.0.1:3456".to_string(),
             thread_id: Some("thread-123".to_string()),
+            cwd: Some("/tmp/task".to_string()),
         };
 
         assert_eq!(
             attach_cli_args("codex", &target),
             vec![
                 "codex".to_string(),
+                "-C".to_string(),
+                "/tmp/task".to_string(),
                 "resume".to_string(),
                 "--remote".to_string(),
                 "ws://127.0.0.1:3456".to_string(),
@@ -1464,6 +1490,7 @@ mod tests {
         let target = AttachTarget::CodexContainerExec {
             runtime_id: "ctr-1".to_string(),
             thread_id: Some("thread-123".to_string()),
+            cwd: Some("/tmp/task".to_string()),
         };
 
         assert_eq!(
@@ -1475,6 +1502,8 @@ mod tests {
                 "--interactive".to_string(),
                 "ctr-1".to_string(),
                 "codex".to_string(),
+                "-C".to_string(),
+                "/tmp/task".to_string(),
                 "resume".to_string(),
                 "thread-123".to_string(),
             ]
@@ -1486,6 +1515,7 @@ mod tests {
         let target = AttachTarget::Codex {
             uri: "ws://127.0.0.1:3456".to_string(),
             thread_id: None,
+            cwd: None,
         };
 
         assert_eq!(
@@ -1530,6 +1560,7 @@ mod tests {
                 &AttachTarget::Codex {
                     uri: "ws://127.0.0.1:3456".to_string(),
                     thread_id: Some("thread-123".to_string()),
+                    cwd: Some("/tmp/task".to_string()),
                 },
                 Some(cwd),
             ),
@@ -1540,6 +1571,7 @@ mod tests {
                 &AttachTarget::CodexContainerExec {
                     runtime_id: "ctr-1".to_string(),
                     thread_id: Some("thread-123".to_string()),
+                    cwd: Some("/tmp/task".to_string()),
                 },
                 Some(cwd),
             ),
